@@ -52,6 +52,10 @@ progress{width:100%}
 <button data-c="#2F4BFF" aria-label="Blue" aria-pressed="false" style="background:#2F4BFF"></button>
 <input id="custom" type="color" value="#ff7a59" aria-label="Custom color" style="width:44px;height:44px;border:0;padding:0;background:none">
 </div></div>
+<div><h3>TOUCH-UP BRUSH</h3>
+<div class="sw" style="flex-wrap:wrap;margin-bottom:10px"><button id="mRestore" aria-pressed="true" style="width:auto;padding:0 14px">Restore</button><button id="mErase" aria-pressed="false" style="width:auto;padding:0 14px">Erase</button><button id="undo" style="width:auto;padding:0 14px">Undo</button></div>
+<label style="font-size:14px">Brush size<input id="size" type="range" min="5" max="150" value="40" style="width:100%"></label>
+<label style="font-size:14px">Edge softness<input id="soft" type="range" min="0" max="12" value="0" style="width:100%"></label></div>
 <div><h3>STATUS</h3><div id="status"></div><progress id="bar" max="100" value="0" hidden></progress></div>
 <button class="pri" id="dl" disabled>Download PNG</button>
 <button id="again">New image</button>
@@ -106,32 +110,44 @@ async function run(file) {
     const { output } = await model({ input: pixel_values });
     const mask = await RawImage.fromTensor(output[0].mul(255).to("uint8")).resize(image.width, image.height);
 
-    // Cut out at full original resolution
-    const off = new OffscreenCanvas(image.width, image.height);
-    const octx = off.getContext("2d");
-    const bmp = await createImageBitmap(file);
-    octx.drawImage(bmp, 0, 0);
-    const d = octx.getImageData(0, 0, image.width, image.height);
-    for (let i = 0; i < mask.data.length; i++) d.data[4 * i + 3] = mask.data[i];
-    octx.putImageData(d, 0, 0);
-    cutout = off;
+    const w = image.width, h = image.height;
+    orig = new OffscreenCanvas(w, h);
+    orig.getContext("2d").drawImage(await createImageBitmap(file), 0, 0);
+    maskCv = new OffscreenCanvas(w, h);
+    mctx = maskCv.getContext("2d");
+    const d = mctx.createImageData(w, h);
+    for (let i = 0; i < mask.data.length; i++) { d.data[4*i] = d.data[4*i+1] = d.data[4*i+2] = 255; d.data[4*i+3] = mask.data[i]; }
+    mctx.putImageData(d, 0, 0);
+    cutout = new OffscreenCanvas(w, h);
+    undoStack = [];
     paint();
     $("#dl").disabled = false;
-    status("Done. Pick a background or download.");
+    status("Done. Touch up with the brush, pick a background, then download.");
   } catch (e) {
     console.error(e);
     status("Something went wrong: " + e.message);
   }
 }
 
+let orig, maskCv, mctx, undoStack = [], mode = "restore", soft = 0, queued = false;
 function paint() {
   if (!cutout) return;
-  cv.width = cutout.width; cv.height = cutout.height;
+  const t = cutout.getContext("2d");
+  t.globalCompositeOperation = "source-over";
+  t.clearRect(0, 0, cutout.width, cutout.height);
+  t.drawImage(orig, 0, 0);
+  t.globalCompositeOperation = "destination-in";
+  t.filter = soft ? `blur(${soft}px)` : "none";
+  t.drawImage(maskCv, 0, 0);
+  t.filter = "none";
+  t.globalCompositeOperation = "source-over";
+  if (cv.width !== cutout.width || cv.height !== cutout.height) { cv.width = cutout.width; cv.height = cutout.height; }
+  ctx.clearRect(0, 0, cv.width, cv.height);
   if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, cv.width, cv.height); }
-  else ctx.clearRect(0, 0, cv.width, cv.height);
   ctx.drawImage(cutout, 0, 0);
   $("#stage").classList.toggle("solid", !!bg);
 }
+const schedule = () => { if (!queued) { queued = true; requestAnimationFrame(() => { queued = false; paint(); }); } };
 
 $("#sw").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
@@ -144,6 +160,37 @@ $("#dl").onclick = () => {
   a.download = "cutout.png"; a.href = cv.toDataURL("image/png"); a.click();
 };
 $("#again").onclick = () => { cutout = null; $("#editor").style.display = "none"; $("#home").style.display = "block"; $("#file").value = ""; };
+
+const setMode = m => { mode = m; $("#mRestore").setAttribute("aria-pressed", m === "restore"); $("#mErase").setAttribute("aria-pressed", m === "erase"); };
+$("#mRestore").onclick = () => setMode("restore");
+$("#mErase").onclick = () => setMode("erase");
+$("#soft").oninput = e => { soft = +e.target.value; schedule(); };
+$("#undo").onclick = () => {
+  const u = undoStack.pop(); if (!u) return;
+  mctx.globalCompositeOperation = "source-over";
+  mctx.clearRect(0, 0, maskCv.width, maskCv.height);
+  mctx.drawImage(u, 0, 0); schedule();
+};
+let last = null;
+const pos = e => { const r = cv.getBoundingClientRect(); const k = cv.width / r.width; return [(e.clientX - r.left) * k, (e.clientY - r.top) * k]; };
+function stroke(a, b) {
+  mctx.globalCompositeOperation = mode === "erase" ? "destination-out" : "source-over";
+  mctx.strokeStyle = "#fff"; mctx.lineCap = mctx.lineJoin = "round";
+  mctx.lineWidth = +$("#size").value * cv.width / cv.getBoundingClientRect().width;
+  mctx.beginPath(); mctx.moveTo(a[0], a[1]); mctx.lineTo(b[0], b[1]); mctx.stroke();
+  schedule();
+}
+cv.style.cursor = "crosshair"; cv.style.touchAction = "none";
+cv.addEventListener("pointerdown", e => {
+  if (!cutout) return;
+  cv.setPointerCapture(e.pointerId);
+  const c = new OffscreenCanvas(maskCv.width, maskCv.height);
+  c.getContext("2d").drawImage(maskCv, 0, 0);
+  undoStack.push(c); if (undoStack.length > 10) undoStack.shift();
+  last = pos(e); stroke(last, last);
+});
+cv.addEventListener("pointermove", e => { if (!last) return; const p = pos(e); stroke(last, p); last = p; });
+["pointerup", "pointercancel"].forEach(t => cv.addEventListener(t, () => last = null));
 
 $("#file").onchange = e => e.target.files[0] && run(e.target.files[0]);
 const drop = $("#drop");
