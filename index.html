@@ -29,6 +29,34 @@ aside h3{margin:0 0 8px;font-size:13px;color:var(--mut);letter-spacing:.5px}
 .sw button[aria-pressed=true]{outline:2px solid var(--acc)}
 #status{color:var(--mut);font-size:14px;min-height:20px}
 progress{width:100%}
+
+/* ---- polished controls ---- */
+button,.btn{font-weight:500;transition:background .15s,border-color .15s,box-shadow .15s,transform .05s}
+button:hover:not(:disabled),.btn:hover{border-color:#9AA0AA}
+button:active:not(:disabled){transform:translateY(1px)}
+button:focus-visible,.btn:focus-within,input:focus-visible{outline:3px solid rgba(47,75,255,.35);outline-offset:2px}
+.pri{box-shadow:0 1px 2px rgba(20,22,26,.2),0 4px 12px rgba(47,75,255,.25)}
+.pri:hover:not(:disabled),.btn.pri:hover{background:#2440e6;border:0}
+button:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+aside{box-shadow:0 1px 3px rgba(20,22,26,.08),0 8px 24px rgba(20,22,26,.06);border:1px solid #E6E7EA;gap:22px}
+aside h3{font-size:11px;font-weight:600;letter-spacing:.8px;color:#6A6F78;margin:0 0 10px}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.seg{display:flex;gap:4px;background:#EEF0F3;border-radius:12px;padding:4px}
+.seg button{flex:1;border:0;background:transparent;border-radius:9px;min-height:40px;padding:0 10px;display:flex;align-items:center;justify-content:center;gap:8px;color:#4A4F57;font-size:14px}
+.seg button[aria-pressed=true]{background:#fff;color:var(--acc);font-weight:600;box-shadow:0 1px 3px rgba(20,22,26,.18)}
+.seg button:hover:not([aria-pressed=true]){background:rgba(255,255,255,.6);border:0}
+.ghost{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:10px;font-size:14px}
+.full{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;font-size:15px;min-height:48px}
+.swatches{display:flex;gap:12px;align-items:center}
+.swatches button,.swatches input{width:36px;height:36px;min-height:36px;padding:0;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #C9CDD3;cursor:pointer}
+.swatches button[aria-pressed=true]{box-shadow:0 0 0 2px var(--acc)}
+.swatches input[type=color]{-webkit-appearance:none;appearance:none;background:none;overflow:hidden}
+.swatches input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+.swatches input[type=color]::-webkit-color-swatch{border:0;border-radius:50%}
+.row{display:flex;justify-content:space-between;font-size:13px;color:#4A4F57;margin:14px 0 8px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:3px;background:#E1E3E8;outline-offset:6px;margin:0}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:var(--acc);border:3px solid #fff;box-shadow:0 1px 4px rgba(20,22,26,.35);cursor:pointer}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--acc);border:3px solid #fff;box-shadow:0 1px 4px rgba(20,22,26,.35);cursor:pointer}
 </style>
 </head>
 <body>
@@ -46,19 +74,29 @@ progress{width:100%}
 <div id="stage"><canvas id="cv"></canvas></div>
 <aside>
 <div><h3>BACKGROUND</h3>
-<div class="sw" id="sw">
-<button data-c="" aria-label="Transparent" aria-pressed="true" style="background:#E4E5E8"></button>
-<button data-c="#ffffff" aria-label="White" aria-pressed="false"></button>
+<div class="swatches" id="sw">
+<button data-c="" aria-label="Transparent" aria-pressed="true" style="background-color:#fff;background-image:linear-gradient(45deg,#D5D7DB 25%,transparent 25%,transparent 75%,#D5D7DB 75%),linear-gradient(45deg,#D5D7DB 25%,transparent 25%,transparent 75%,#D5D7DB 75%);background-size:10px 10px;background-position:0 0,5px 5px"></button>
+<button data-c="#ffffff" aria-label="White" aria-pressed="false" style="background:#fff"></button>
 <button data-c="#2F4BFF" aria-label="Blue" aria-pressed="false" style="background:#2F4BFF"></button>
-<input id="custom" type="color" value="#ff7a59" aria-label="Custom color" style="width:44px;height:44px;border:0;padding:0;background:none">
+<button data-c="#14161A" aria-label="Black" aria-pressed="false" style="background:#14161A"></button>
+<input id="custom" type="color" value="#ff7a59" aria-label="Custom color">
 </div></div>
 <div><h3>TOUCH-UP BRUSH</h3>
-<div class="sw" style="flex-wrap:wrap;margin-bottom:10px"><button id="mRestore" aria-pressed="true" style="width:auto;padding:0 14px">Restore</button><button id="mErase" aria-pressed="false" style="width:auto;padding:0 14px">Erase</button><button id="undo" style="width:auto;padding:0 14px">Undo</button></div>
-<label style="font-size:14px">Brush size<input id="size" type="range" min="5" max="150" value="40" style="width:100%"></label>
-<label style="font-size:14px">Edge softness<input id="soft" type="range" min="0" max="12" value="0" style="width:100%"></label></div>
+<div class="seg" role="group" aria-label="Brush mode">
+<button id="mRestore" aria-pressed="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 114.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 00-3-3.02z"/></svg>Restore</button>
+<button id="mErase" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20H9L4.5 15.5a2 2 0 010-2.8l8.2-8.2a2 2 0 012.8 0l5 5a2 2 0 010 2.8L13 19"/><path d="M7 13l5 5"/></svg>Erase</button>
+</div>
+<div class="row"><span>Brush size</span></div>
+<input id="size" type="range" min="5" max="150" value="40" aria-label="Brush size">
+<div class="row"><span>Edge softness</span></div>
+<input id="soft" type="range" min="0" max="12" value="0" aria-label="Edge softness">
+<button id="undo" class="ghost"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/></svg>Undo last stroke</button>
+</div>
 <div><h3>STATUS</h3><div id="status"></div><progress id="bar" max="100" value="0" hidden></progress></div>
-<button class="pri" id="dl" disabled>Download PNG</button>
-<button id="again">New image</button>
+<div>
+<button class="pri full" id="dl" disabled><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>Download PNG</button>
+<button id="again" class="ghost"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New image</button>
+</div>
 </aside>
 </section>
 </main>
