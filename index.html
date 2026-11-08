@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cutout – Free Background Remover</title>
+<style>
+:root{--bg:#F7F7F4;--ink:#14161A;--mut:#4A4F57;--acc:#2F4BFF;--line:#C9CDD3}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px 24px}
+header b{font-size:22px}
+main{max-width:1100px;margin:0 auto;padding:24px}
+h1{font-size:clamp(32px,6vw,52px);line-height:1.05;letter-spacing:-1px;margin:0 0 12px}
+p.sub{color:var(--mut);font-size:18px;margin:0 0 24px;max-width:560px}
+#drop{border:2px dashed #9AA0AA;border-radius:16px;background:#fff;padding:40px 16px;text-align:center}
+#drop.over{border-color:var(--acc);background:#eef1ff}
+button,.btn{font:inherit;min-height:44px;padding:0 20px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer}
+.pri{background:var(--acc);color:#fff;border:0;font-weight:600}
+#editor{display:none;gap:24px;flex-wrap:wrap}
+#stage{flex:1 1 480px;min-height:360px;border-radius:12px;display:flex;align-items:center;justify-content:center;padding:12px;
+background-color:#fff;background-image:linear-gradient(45deg,#E4E5E8 25%,transparent 25%,transparent 75%,#E4E5E8 75%),linear-gradient(45deg,#E4E5E8 25%,transparent 25%,transparent 75%,#E4E5E8 75%);background-size:24px 24px;background-position:0 0,12px 12px}
+#stage.solid{background-image:none}
+canvas{max-width:100%;max-height:70vh}
+aside{flex:0 0 280px;background:#fff;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:20px}
+aside h3{margin:0 0 8px;font-size:13px;color:var(--mut);letter-spacing:.5px}
+.sw{display:flex;gap:10px}
+.sw button{width:44px;padding:0}
+.sw button[aria-pressed=true]{outline:2px solid var(--acc)}
+#status{color:var(--mut);font-size:14px;min-height:20px}
+progress{width:100%}
+</style>
+</head>
+<body>
+<header><b>Cutout</b><span style="color:var(--mut);font-size:14px">Runs in your browser. Photos never leave your device.</span></header>
+<main>
+<section id="home">
+<h1>Remove backgrounds.<br>Free and private.</h1>
+<p class="sub">No signup, no watermark, full resolution. The first run downloads the AI model once, then it is cached.</p>
+<div id="drop">
+<label class="btn pri" style="display:inline-flex;align-items:center">Upload image<input id="file" type="file" accept="image/*" hidden></label>
+<p style="color:var(--mut);font-size:14px">or drop a file here, or paste with Ctrl+V</p>
+</div>
+</section>
+<section id="editor">
+<div id="stage"><canvas id="cv"></canvas></div>
+<aside>
+<div><h3>BACKGROUND</h3>
+<div class="sw" id="sw">
+<button data-c="" aria-label="Transparent" aria-pressed="true" style="background:#E4E5E8"></button>
+<button data-c="#ffffff" aria-label="White" aria-pressed="false"></button>
+<button data-c="#2F4BFF" aria-label="Blue" aria-pressed="false" style="background:#2F4BFF"></button>
+<input id="custom" type="color" value="#ff7a59" aria-label="Custom color" style="width:44px;height:44px;border:0;padding:0;background:none">
+</div></div>
+<div><h3>STATUS</h3><div id="status"></div><progress id="bar" max="100" value="0" hidden></progress></div>
+<button class="pri" id="dl" disabled>Download PNG</button>
+<button id="again">New image</button>
+</aside>
+</section>
+</main>
+
+<script type="module">
+import { AutoModel, AutoProcessor, RawImage, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/+esm";
+
+// NOTE: RMBG-1.4 is non-commercial. Before monetizing, swap MODEL for a permissively
+// licensed model (e.g. a BiRefNet ONNX build) or buy a BRIA commercial license.
+const MODEL = "briaai/RMBG-1.4";
+env.allowLocalModels = false;
+
+const $ = s => document.querySelector(s);
+const cv = $("#cv"), ctx = cv.getContext("2d");
+let model, processor, cutout = null, bg = "";
+
+const status = t => $("#status").textContent = t;
+
+async function load() {
+  if (model) return;
+  status("Downloading AI model (first time only)…");
+  $("#bar").hidden = false;
+  const progress_callback = p => { if (p.progress) $("#bar").value = p.progress; };
+  model = await AutoModel.from_pretrained(MODEL, {
+    config: { model_type: "custom" }, progress_callback,
+    device: navigator.gpu ? "webgpu" : "wasm"
+  });
+  processor = await AutoProcessor.from_pretrained(MODEL, {
+    config: {
+      do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+      image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor",
+      image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098,
+      size: { width: 1024, height: 1024 }
+    }
+  });
+  $("#bar").hidden = true;
+}
+
+async function run(file) {
+  $("#home").style.display = "none";
+  $("#editor").style.display = "flex";
+  $("#dl").disabled = true;
+  try {
+    await load();
+    status("Removing background…");
+    const url = URL.createObjectURL(file);
+    const image = await RawImage.fromURL(url);
+    const { pixel_values } = await processor(image);
+    const { output } = await model({ input: pixel_values });
+    const mask = await RawImage.fromTensor(output[0].mul(255).to("uint8")).resize(image.width, image.height);
+
+    // Cut out at full original resolution
+    const off = new OffscreenCanvas(image.width, image.height);
+    const octx = off.getContext("2d");
+    const bmp = await createImageBitmap(file);
+    octx.drawImage(bmp, 0, 0);
+    const d = octx.getImageData(0, 0, image.width, image.height);
+    for (let i = 0; i < mask.data.length; i++) d.data[4 * i + 3] = mask.data[i];
+    octx.putImageData(d, 0, 0);
+    cutout = off;
+    paint();
+    $("#dl").disabled = false;
+    status("Done. Pick a background or download.");
+  } catch (e) {
+    console.error(e);
+    status("Something went wrong: " + e.message);
+  }
+}
+
+function paint() {
+  if (!cutout) return;
+  cv.width = cutout.width; cv.height = cutout.height;
+  if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, cv.width, cv.height); }
+  else ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(cutout, 0, 0);
+  $("#stage").classList.toggle("solid", !!bg);
+}
+
+$("#sw").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  document.querySelectorAll("#sw button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  bg = b.dataset.c; paint();
+});
+$("#custom").addEventListener("input", e => { bg = e.target.value; paint(); });
+$("#dl").onclick = () => {
+  const a = document.createElement("a");
+  a.download = "cutout.png"; a.href = cv.toDataURL("image/png"); a.click();
+};
+$("#again").onclick = () => { cutout = null; $("#editor").style.display = "none"; $("#home").style.display = "block"; $("#file").value = ""; };
+
+$("#file").onchange = e => e.target.files[0] && run(e.target.files[0]);
+const drop = $("#drop");
+["dragover", "dragenter"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) run(f); });
+addEventListener("paste", e => { const f = [...e.clipboardData.files][0]; if (f) run(f); });
+</script>
+</body>
+</html>
