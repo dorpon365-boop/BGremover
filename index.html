@@ -67,6 +67,17 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .two button,.ghost{min-height:40px;font-size:14px}
 .ghost.on{border-color:var(--acc);color:var(--acc)}
+
+#busy{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:5;background:#14161A;overflow:hidden}
+#busy img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:.4;filter:blur(2px)}
+.scan{position:absolute;left:0;right:0;top:0;height:120px;background:linear-gradient(180deg,transparent,rgba(47,75,255,.55),transparent);animation:scan 2.2s ease-in-out infinite alternate}
+@keyframes scan{from{transform:translateY(-120px)}to{transform:translateY(72vh)}}
+#busy .card{position:relative;background:#fff;border-radius:16px;padding:24px 28px;width:min(440px,88%);text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+.spin{width:44px;height:44px;margin:0 auto 14px;border:4px solid #E1E3E8;border-top-color:var(--acc);border-radius:50%;animation:sp 1s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+#bstep{font-size:15px;line-height:1.4;display:block}
+#bp{width:100%;margin-top:12px;height:8px}
+#btip{margin-top:14px;font-size:14px;color:#4A4F57;min-height:40px;line-height:1.4}
 </style>
 </head>
 <body>
@@ -81,7 +92,7 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 </div>
 </section>
 <section id="editor">
-<div id="stage"><div id="view"><canvas id="cv"></canvas><div id="crop"></div></div></div>
+<div id="stage"><div id="view"><canvas id="cv"></canvas><div id="crop"></div></div><div id="busy"><img id="bimg" alt=""><div class="scan"></div><div class="card"><div class="spin"></div><b id="bstep"></b><progress id="bp" max="100" value="0" hidden></progress><div id="btip"></div><button id="bretry" class="pri" hidden style="margin-top:14px">Try again</button></div></div></div>
 <aside>
 <div><h3>BACKGROUND</h3>
 <div class="swatches" id="sw">
@@ -135,21 +146,42 @@ let model, processor, orig, maskCv, mctx, cutout = null, undoStack = [], bg = ""
 let shadow = 0, soft = 0, mode = "restore", showOrig = false, queued = false, z = 1, px = 0, py = 0, crop = null, last = null, pan = null, cd = null;
 const status = t => $("#status").textContent = t;
 
-async function load() {
-  if (model) return;
-  status("Downloading AI model (first time only)…"); $("#bar").hidden = false;
-  const progress_callback = p => { if (p.progress) $("#bar").value = p.progress; };
-  model = await AutoModel.from_pretrained(MODEL, { config: { model_type: "custom" }, progress_callback, device: navigator.gpu ? "webgpu" : "wasm" });
-  processor = await AutoProcessor.from_pretrained(MODEL, { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor", image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098, size: { width: 1024, height: 1024 } } });
-  $("#bar").hidden = true;
+const TIPS = [
+  "Your photo never leaves your device. Everything runs privately in your browser.",
+  "Tip: use the Restore brush to bring back hair strands or fine edges.",
+  "Tip: choose Passport or Stamp size after this, and we crop it for you.",
+  "The AI model is only downloaded once. Next time it starts quickly.",
+  "Tip: add a drop shadow to make product photos look professional.",
+  "Tip: use your mouse wheel to zoom in for detailed touch-ups."
+];
+let tipT, loading;
+const stepTxt = t => $("#bstep").textContent = t;
+function busy(on, img) {
+  $("#busy").style.display = on ? "flex" : "none"; clearInterval(tipT);
+  if (!on) return;
+  if (img) $("#bimg").src = img;
+  $("#bretry").hidden = true; $("#bp").hidden = true; let i = 0; $("#btip").textContent = TIPS[0];
+  tipT = setInterval(() => $("#btip").textContent = TIPS[++i % TIPS.length], 3500);
 }
+async function doLoad() {
+  const progress_callback = p => {
+    if (p.status === "progress" && p.total > 1e6) { const v = Math.round(p.progress); $("#bp").hidden = false; $("#bp").value = v; stepTxt(`Step 1 of 3 · Downloading AI model (first time only) ${v}%`); }
+  };
+  model = await AutoModel.from_pretrained(MODEL, { config: { model_type: "custom" }, dtype: "q8", device: "wasm", progress_callback });
+  processor = await AutoProcessor.from_pretrained(MODEL, { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor", image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098, size: { width: 1024, height: 1024 } } });
+}
+const load = () => loading || (loading = doLoad().catch(e => { loading = null; throw e; }));
+const tick = () => new Promise(r => setTimeout(r, 60));
 
 async function run(file) {
   $("#home").style.display = "none"; $("#editor").style.display = "flex"; $("#dl").disabled = true;
+  const url = URL.createObjectURL(file); busy(true, url); stepTxt("Step 1 of 3 · Preparing AI model…");
   try {
-    await load(); status("Removing background…");
-    const image = await RawImage.fromURL(URL.createObjectURL(file));
+    await load(); $("#bp").hidden = true;
+    stepTxt("Step 2 of 3 · Analyzing your photo…"); await tick();
+    const image = await RawImage.fromURL(url);
     const { pixel_values } = await processor(image);
+    stepTxt("Step 3 of 3 · Cutting out the subject…"); await tick();
     const { output } = await model({ input: pixel_values });
     const mask = await RawImage.fromTensor(output[0].mul(255).to("uint8")).resize(image.width, image.height);
     const w = image.width, h = image.height;
@@ -159,9 +191,13 @@ async function run(file) {
     for (let i = 0; i < mask.data.length; i++) { d.data[4 * i] = d.data[4 * i + 1] = d.data[4 * i + 2] = 255; d.data[4 * i + 3] = mask.data[i]; }
     mctx.putImageData(d, 0, 0);
     cutout = new OffscreenCanvas(w, h); undoStack = []; crop = null; $("#preset").value = ""; setPreset("");
-    cv.width = 0; paint();
+    cv.width = 0; paint(); busy(false);
     $("#dl").disabled = false; status("Done. Touch up, crop, pick a background, then download.");
-  } catch (e) { console.error(e); status("Something went wrong: " + e.message); }
+  } catch (e) {
+    console.error(e); clearInterval(tipT); $("#bp").hidden = true;
+    stepTxt("Couldn't finish: " + (e.message || e) + ". Check your internet connection (turn off VPN or ad-blocker if you use one) and try again.");
+    $("#bretry").hidden = false; $("#bretry").onclick = () => run(file);
+  }
 }
 
 function drawFinal(c, W, H) {
@@ -303,6 +339,7 @@ const drop = $("#drop");
 ["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) run(f); });
 addEventListener("paste", e => { const f = [...e.clipboardData.files][0]; if (f) run(f); });
+load().catch(() => {}); // start downloading the model while the user picks a photo
 </script>
 </body>
 </html>
