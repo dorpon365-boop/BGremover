@@ -121,7 +121,8 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 <button id="fit" class="ghost">Fit to screen</button>
 </div>
 <div><h3>CROP · PASSPORT · STAMP</h3>
-<select id="preset" aria-label="Crop preset"><option value="">No crop</option><option value="35x45">Passport 35×45 mm (India/UK/EU)</option><option value="51x51">Passport 2×2 in (US)</option><option value="20x25">Stamp size 20×25 mm</option><option value="25x35">Small 25×35 mm</option><option value="1x1">Square 1:1</option></select>
+<select id="preset" aria-label="Crop preset"><option value="">No crop</option><option value="35x45">Passport 35×45 mm (India/UK/EU)</option><option value="51x51">Passport 2×2 in (US)</option><option value="20x25">Stamp size 20×25 mm</option><option value="25x35">Small 25×35 mm</option><option value="1x1">Square 1:1</option><option value="free">Free selection (any size)</option></select>
+<button id="drawsel" class="ghost">✎ Draw crop area</button>
 <div id="cropctl" hidden><div class="row"><span>Crop size (drag box to move)</span></div><input id="csize" type="range" min="20" max="100" value="100" aria-label="Crop size"><button id="center" class="ghost">Center on subject</button></div>
 </div>
 <div><h3>EXPORT</h3>
@@ -261,16 +262,18 @@ function stroke(a, b) {
 cv.style.cursor = "crosshair"; cv.style.touchAction = "none";
 cv.addEventListener("pointerdown", e => {
   if (!cutout) return; cv.setPointerCapture(e.pointerId);
+  if (drawMode) { sel = pos(e); return; }
   if (mode === "pan" || e.button === 1) { pan = { x: e.clientX, y: e.clientY, px, py }; return; }
   const c = new OffscreenCanvas(maskCv.width, maskCv.height); c.getContext("2d").drawImage(maskCv, 0, 0);
   undoStack.push(c); if (undoStack.length > 10) undoStack.shift();
   last = pos(e); stroke(last, last);
 });
 cv.addEventListener("pointermove", e => {
+  if (drawMode && sel) { dragSel(pos(e)); return; }
   if (pan) { px = pan.px + e.clientX - pan.x; py = pan.py + e.clientY - pan.y; xform(); return; }
   if (!last) return; const p = pos(e); stroke(last, p); last = p;
 });
-["pointerup", "pointercancel"].forEach(t => cv.addEventListener(t, () => { last = null; pan = null; }));
+["pointerup", "pointercancel"].forEach(t => cv.addEventListener(t, () => { last = null; pan = null; if (sel) { sel = null; setDraw(false); } }));
 
 // ---- crop (passport / stamp)
 function bbox() {
@@ -294,13 +297,35 @@ function syncCrop() {
 function setPreset(v) {
   $("#cropctl").hidden = $("#sheet").hidden = true;
   if (!v || !orig) { crop = null; syncCrop(); return; }
-  const [a, b] = PRE[v]; crop = { v, ar: a / b, mm: v !== "1x1", x: 0, y: 0, w: 0 };
+  const [a, b] = PRE[v] || [3, 4]; crop = { v, ar: a / b, mm: v !== "1x1" && v !== "free", x: 0, y: 0, w: 0 };
   if (crop.mm) { bg = "#ffffff"; bgImg = null; mark(bg); paint(); $("#sheet").hidden = false; }
   $("#cropctl").hidden = false; autoBox();
 }
 $("#preset").onchange = e => setPreset(e.target.value);
 $("#center").onclick = () => crop && autoBox();
 $("#csize").oninput = e => { if (!crop) return; const mx = Math.min(orig.width, orig.height * crop.ar), h = crop.w / crop.ar; placeBox(crop.x + crop.w / 2, crop.y + h / 2, mx * e.target.value / 100); };
+let drawMode = false, sel = null;
+function setDraw(on) {
+  drawMode = on; $("#drawsel").classList.toggle("on", on);
+  $("#drawsel").textContent = on ? "Drag on the photo to select (Esc to cancel)" : "✎ Draw crop area";
+  $("#crop").style.pointerEvents = on ? "none" : "auto";
+}
+$("#drawsel").onclick = () => {
+  if (!cutout) return;
+  if (!crop) { $("#preset").value = "free"; setPreset("free"); }
+  setDraw(!drawMode); sel = null;
+};
+function dragSel(p) {
+  const W = orig.width, H = orig.height, [x, y] = sel, dx = p[0] - x, dy = p[1] - y, sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
+  const maxW = sx > 0 ? W - x : x, maxH = sy > 0 ? H - y : y;
+  let w = Math.abs(dx), h = Math.abs(dy);
+  if (crop.v !== "free") { w = Math.min(Math.max(w, h * crop.ar), maxW, maxH * crop.ar); h = w / crop.ar; }
+  else { w = Math.min(w, maxW); h = Math.min(h, maxH); }
+  if (w < 8 || h < 8) return;
+  crop.x = sx > 0 ? x : x - w; crop.y = sy > 0 ? y : y - h; crop.w = w;
+  if (crop.v === "free") crop.ar = w / h;
+  $("#csize").value = Math.round(100 * w / Math.min(W, H * crop.ar)); syncCrop();
+}
 const cb = $("#crop");
 cb.addEventListener("pointerdown", e => { e.stopPropagation(); cb.setPointerCapture(e.pointerId); cd = { x: e.clientX, y: e.clientY, cx: crop.x, cy: crop.y }; });
 cb.addEventListener("pointermove", e => { if (!cd) return; const k = orig.width / cv.getBoundingClientRect().width; crop.x = clamp(cd.cx + (e.clientX - cd.x) * k, 0, orig.width - crop.w); crop.y = clamp(cd.cy + (e.clientY - cd.y) * k, 0, orig.height - crop.w / crop.ar); syncCrop(); });
@@ -332,6 +357,7 @@ $("#again").onclick = () => { cutout = null; crop = null; syncCrop(); $("#editor
 addEventListener("keydown", e => {
   if (!cutout || /INPUT|SELECT/.test(e.target.tagName)) return;
   const k = e.key.toLowerCase();
+  if (k === "escape" && drawMode) { sel = null; setDraw(false); return; }
   if ((e.ctrlKey || e.metaKey) && k === "z") { e.preventDefault(); undo(); }
   else if (k === "b") setMode("restore"); else if (k === "e") setMode("erase"); else if (k === "h") setMode("pan");
   else if (k === "[" || k === "]") { const s = $("#size"); s.value = +s.value + (k === "]" ? 10 : -10); }
