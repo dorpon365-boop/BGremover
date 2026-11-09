@@ -167,7 +167,14 @@ async function doLoad() {
   const progress_callback = p => {
     if (p.status === "progress" && p.total > 1e6) { const v = Math.round(p.progress); $("#bp").hidden = false; $("#bp").value = v; stepTxt(`Step 1 of 3 · Downloading AI model (first time only) ${v}%`); }
   };
-  model = await AutoModel.from_pretrained(MODEL, { config: { model_type: "custom" }, dtype: "q8", device: "wasm", progress_callback });
+  // Try the small model first; if its download fails, fall back to the full model (which may already be cached from earlier visits)
+  const tries = [{ dtype: "q8", device: "wasm" }, { dtype: "fp32", device: navigator.gpu ? "webgpu" : "wasm" }, { dtype: "fp32", device: "wasm" }];
+  let lastErr;
+  for (const t of tries) {
+    try { model = await AutoModel.from_pretrained(MODEL, { config: { model_type: "custom" }, ...t, progress_callback }); lastErr = null; break; }
+    catch (e) { console.warn("Model load failed with", t, e); lastErr = e; stepTxt("Retrying with another model version…"); }
+  }
+  if (lastErr) throw lastErr;
   processor = await AutoProcessor.from_pretrained(MODEL, { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor", image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098, size: { width: 1024, height: 1024 } } });
 }
 const load = () => loading || (loading = doLoad().catch(e => { loading = null; throw e; }));
