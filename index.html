@@ -89,7 +89,6 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 <div id="drop">
 <label class="btn pri" style="display:inline-flex;align-items:center">Upload image<input id="file" type="file" accept="image/*" hidden></label>
 <p style="color:var(--mut);font-size:14px">or drop a file here, or paste with Ctrl+V</p>
-<label style="font-size:14px;color:var(--mut)">Speed <select id="qual" style="width:auto;min-height:40px"><option value="512">Fast</option><option value="768" selected>Balanced</option><option value="1024">Best quality</option></select></label>
 </div>
 </section>
 <section id="editor">
@@ -138,6 +137,8 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 import { AutoModel, AutoProcessor, RawImage, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/+esm";
 // BiRefNet-lite (MIT license): safe for commercial use.
 const MODEL = "onnx-community/BiRefNet_lite-ONNX";
+const MODNET = "Xenova/modnet"; // Apache-2.0, lighter portrait model used if BiRefNet cannot run on this device
+let engine = "biref";
 env.allowLocalModels = false;
 const $ = s => document.querySelector(s);
 const cv = $("#cv"), ctx = cv.getContext("2d"), view = $("#view"), stage = $("#stage");
@@ -170,26 +171,31 @@ async function doLoad() {
   };
   // Try the small model first; if its download fails, fall back to the full model (which may already be cached from earlier visits)
   const gpu = navigator.gpu && !skipGpu;
-  const tries = [...(gpu ? [{ dtype: "fp16", device: "webgpu" }] : []), { dtype: "q8", device: "wasm" }, ...(gpu ? [{ dtype: "fp32", device: "webgpu" }] : []), { dtype: "fp32", device: "wasm" }];
+  const tries = engine === "modnet" ? [{ dtype: "fp32", device: "wasm" }] : [...(gpu ? [{ dtype: "fp16", device: "webgpu" }] : []), { dtype: "q8", device: "wasm" }, ...(gpu ? [{ dtype: "fp32", device: "webgpu" }] : []), { dtype: "fp32", device: "wasm" }];
   let lastErr;
   for (const t of tries) {
-    try { model = await AutoModel.from_pretrained(MODEL, { ...t, progress_callback }); usedGpu = t.device === "webgpu"; lastErr = null; break; }
+    try { model = await AutoModel.from_pretrained(engine === "modnet" ? MODNET : MODEL, { ...t, progress_callback }); usedGpu = t.device === "webgpu"; lastErr = null; break; }
     catch (e) { console.warn("Model load failed with", t, e); lastErr = e; stepTxt("Retrying with another model version…"); }
   }
   if (lastErr) throw lastErr;
 }
 const procs = {};
-const getProc = async size => procs[size] ??= await AutoProcessor.from_pretrained(MODEL, { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.485, 0.456, 0.406], feature_extractor_type: "ImageFeatureExtractor", image_std: [0.229, 0.224, 0.225], resample: 2, rescale_factor: 0.00392156862745098, size: { width: size, height: size } } });
+const getProc = async k => procs[k] ??= await AutoProcessor.from_pretrained(k === "modnet" ? MODNET : MODEL);
 let skipGpu = false, usedGpu = false;
 async function infer(image) {
-  const size = +$("#qual").value;
-  const go = async sz => { const { pixel_values } = await (await getProc(sz))(image); return (await model({ input_image: pixel_values })).output_image; };
-  try { return await go(size); }
-  catch (e) {
-    console.warn("Inference failed, retrying safely", e);
-    if (usedGpu) { skipGpu = true; model = null; loading = null; await load(); }
-    return await go(1024);
+  if (engine === "biref") {
+    try {
+      const { pixel_values } = await (await getProc("biref"))(image);
+      const o = await model({ input_image: pixel_values });
+      return o.output_image[0].sigmoid().mul(255).to("uint8");
+    } catch (e) {
+      console.warn("BiRefNet failed on this device, switching to portrait model", e);
+      engine = "modnet"; model = null; loading = null; stepTxt("Switching to fast portrait mode…"); await load();
+    }
   }
+  const { pixel_values } = await (await getProc("modnet"))(image);
+  const o = await model({ input: pixel_values });
+  return o.output[0].mul(255).to("uint8");
 }
 const load = () => loading || (loading = doLoad().catch(e => { loading = null; throw e; }));
 const tick = () => new Promise(r => setTimeout(r, 60));
@@ -202,8 +208,7 @@ async function run(file) {
     stepTxt("Step 2 of 3 · Analyzing your photo…"); await tick();
     const image = await RawImage.fromURL(url);
     const t0 = performance.now(); stepTxt("Step 3 of 3 · Cutting out the subject…"); await tick();
-    const output = await infer(image);
-    const mask = await RawImage.fromTensor(output[0].sigmoid().mul(255).to("uint8")).resize(image.width, image.height);
+    const mask = await RawImage.fromTensor(await infer(image)).resize(image.width, image.height);
     const w = image.width, h = image.height;
     orig = new OffscreenCanvas(w, h); orig.getContext("2d").drawImage(await createImageBitmap(file), 0, 0);
     maskCv = new OffscreenCanvas(w, h); mctx = maskCv.getContext("2d");
@@ -215,7 +220,7 @@ async function run(file) {
     $("#dl").disabled = false; status("Done in " + ((performance.now() - t0) / 1000).toFixed(1) + "s. Touch up, crop, pick a background, then download.");
   } catch (e) {
     console.error(e); clearInterval(tipT); $("#bp").hidden = true;
-    stepTxt("Couldn't finish: " + (e.message || e) + ". Check your internet connection (turn off VPN or ad-blocker if you use one) and try again.");
+    stepTxt("Couldn't finish: " + (e instanceof Error ? e.message : "not enough memory or not supported on this device, code " + e) + ". Check your internet connection (turn off VPN or ad-blocker if you use one) and try again.");
     $("#bretry").hidden = false; $("#bretry").onclick = () => run(file);
   }
 }
