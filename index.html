@@ -89,7 +89,7 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 <div id="drop">
 <label class="btn pri" style="display:inline-flex;align-items:center">Upload image<input id="file" type="file" accept="image/*" hidden></label>
 <p style="color:var(--mut);font-size:14px">or drop a file here, or paste with Ctrl+V</p>
-<label style="font-size:14px;color:var(--mut)">Mode <select id="eng" style="width:auto;min-height:40px"><option value="modnet">Portrait (fast, recommended)</option><option value="biref">Any object (slower, beta)</option></select></label>
+<label style="font-size:14px;color:var(--mut)">Mode <select id="eng" style="width:auto;min-height:40px"><option value="modnet">Portrait (fast, recommended)</option><option value="obj">Objects &amp; complex photos (slower, ~170 MB first download)</option></select></label>
 </div>
 </section>
 <section id="editor">
@@ -136,10 +136,10 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 
 <script type="module">
 import { AutoModel, AutoProcessor, RawImage, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/+esm";
-// BiRefNet-lite (MIT license): safe for commercial use.
-const MODEL = "shozebDev/birefnet-lite-512-onnx"; // community 512px export of BiRefNet-lite (MIT), much lighter than the 1024px version
-const MODNET = "Xenova/modnet"; // Apache-2.0, lighter portrait model used if BiRefNet cannot run on this device
-let engine = "modnet"; // default: small, fast and reliable. "biref" is opt-in (heavier).
+// IS-Net general-use (Apache-2.0, commercial use allowed): handles objects and complex scenes
+const MODEL = "BritishWerewolf/IS-Net";
+const MODNET = "Xenova/modnet"; // Apache-2.0, lighter portrait model also used if the object model cannot run on this device
+let engine = "modnet"; // default: small, fast portrait model. "obj" = IS-Net for objects (opt-in, bigger download).
 env.allowLocalModels = false;
 const $ = s => document.querySelector(s);
 const cv = $("#cv"), ctx = cv.getContext("2d"), view = $("#view"), stage = $("#stage");
@@ -173,7 +173,7 @@ async function doLoad() {
   // Try the small model first; if its download fails, fall back to the full model (which may already be cached from earlier visits)
   const eng = engine;
   const gpu = navigator.gpu && !skipGpu;
-  const tries = eng === "modnet" ? [{ dtype: "fp32", device: "wasm" }] : [...(gpu ? [{ dtype: "fp16", device: "webgpu" }] : []), { dtype: "fp16", device: "wasm" }];
+  const tries = eng === "modnet" ? [{ dtype: "fp32", device: "wasm" }] : [{ dtype: "q8", device: "wasm" }, { dtype: "fp32", device: "wasm" }];
   let lastErr;
   for (const t of tries) {
     try { const m = await AutoModel.from_pretrained(eng === "modnet" ? MODNET : MODEL, { ...t, progress_callback }); if (eng === engine) { model = m; usedGpu = t.device === "webgpu"; } lastErr = null; break; }
@@ -182,16 +182,16 @@ async function doLoad() {
   if (lastErr) throw lastErr;
 }
 const procs = {};
-const getProc = async k => procs[k] ??= k === "modnet" ? await AutoProcessor.from_pretrained(MODNET) : await AutoProcessor.from_pretrained(MODEL, { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.485, 0.456, 0.406], feature_extractor_type: "ImageFeatureExtractor", image_std: [0.229, 0.224, 0.225], resample: 2, rescale_factor: 0.00392156862745098, size: { width: 512, height: 512 } } });
+const getProc = async k => procs[k] ??= await AutoProcessor.from_pretrained(k === "modnet" ? MODNET : MODEL);
 let skipGpu = false, usedGpu = false, note = "";
 async function infer(image) {
-  if (engine === "biref") {
+  if (engine === "obj") {
     try {
-      const { pixel_values } = await (await getProc("biref"))(image);
-      const o = await model({ input_image: pixel_values });
-      return o.output_image[0].sigmoid().mul(255).to("uint8");
+      const { pixel_values } = await (await getProc("obj"))(image);
+      const o = await model({ input: pixel_values });
+      return o.mask;
     } catch (e) {
-      console.warn("BiRefNet failed on this device, switching to portrait model", e);
+      console.warn("Object model failed on this device, switching to portrait model", e);
       engine = "modnet"; model = null; loading = null; stepTxt("Switching to fast portrait mode…"); await load();
     }
   }
@@ -213,6 +213,7 @@ async function run(file) {
     const image = await RawImage.fromURL(url);
     const t0 = performance.now(); stepTxt("Step 3 of 3 · Cutting out the subject…"); await tick();
     const mask = await RawImage.fromTensor(await infer(image)).resize(image.width, image.height);
+    if (engine === "obj") { let lo = 255, hi = 0; for (const v of mask.data) { if (v < lo) lo = v; if (v > hi) hi = v; } if (hi > lo) for (let i = 0; i < mask.data.length; i++) mask.data[i] = (mask.data[i] - lo) * 255 / (hi - lo); }
     const w = image.width, h = image.height;
     orig = new OffscreenCanvas(w, h); orig.getContext("2d").drawImage(await createImageBitmap(file), 0, 0);
     maskCv = new OffscreenCanvas(w, h); mctx = maskCv.getContext("2d");
@@ -223,7 +224,7 @@ async function run(file) {
     cv.width = 0; paint(); busy(false);
     $("#dl").disabled = false; status(note + "Done in " + ((performance.now() - t0) / 1000).toFixed(1) + "s. Touch up, crop, pick a background, then download."); note = "";
   } catch (e) {
-    if (engine === "biref") { engine = "modnet"; model = null; loading = null; $("#eng").value = "modnet"; note = "Object mode is not supported on this device, so Portrait mode was used. "; return run(file); }
+    if (engine === "obj") { engine = "modnet"; model = null; loading = null; $("#eng").value = "modnet"; note = "Object mode is not supported on this device, so Portrait mode was used. "; return run(file); }
     console.error(e); clearInterval(tipT); $("#bp").hidden = true;
     stepTxt("Couldn't finish: " + (e instanceof Error ? e.message : "not enough memory or not supported on this device, code " + e) + ". Check your internet connection (turn off VPN or ad-blocker if you use one) and try again.");
     $("#bretry").hidden = false; $("#bretry").onclick = () => run(file);
