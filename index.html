@@ -89,6 +89,7 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 <div id="drop">
 <label class="btn pri" style="display:inline-flex;align-items:center">Upload image<input id="file" type="file" accept="image/*" hidden></label>
 <p style="color:var(--mut);font-size:14px">or drop a file here, or paste with Ctrl+V</p>
+<label style="font-size:14px;color:var(--mut)">Mode <select id="eng" style="width:auto;min-height:40px"><option value="modnet">Portrait (fast, recommended)</option><option value="biref">Any object (slower, beta)</option></select></label>
 </div>
 </section>
 <section id="editor">
@@ -138,7 +139,7 @@ import { AutoModel, AutoProcessor, RawImage, env } from "https://cdn.jsdelivr.ne
 // BiRefNet-lite (MIT license): safe for commercial use.
 const MODEL = "onnx-community/BiRefNet_lite-ONNX";
 const MODNET = "Xenova/modnet"; // Apache-2.0, lighter portrait model used if BiRefNet cannot run on this device
-let engine = "biref";
+let engine = "modnet"; // default: small, fast and reliable. "biref" is opt-in (heavier).
 env.allowLocalModels = false;
 const $ = s => document.querySelector(s);
 const cv = $("#cv"), ctx = cv.getContext("2d"), view = $("#view"), stage = $("#stage");
@@ -170,11 +171,12 @@ async function doLoad() {
     if (p.status === "progress" && p.total > 1e6) { const v = Math.round(p.progress); $("#bp").hidden = false; $("#bp").value = v; stepTxt(`Step 1 of 3 · Downloading AI model (first time only) ${v}%`); }
   };
   // Try the small model first; if its download fails, fall back to the full model (which may already be cached from earlier visits)
+  const eng = engine;
   const gpu = navigator.gpu && !skipGpu;
-  const tries = engine === "modnet" ? [{ dtype: "fp32", device: "wasm" }] : [...(gpu ? [{ dtype: "fp16", device: "webgpu" }] : []), { dtype: "q8", device: "wasm" }, ...(gpu ? [{ dtype: "fp32", device: "webgpu" }] : []), { dtype: "fp32", device: "wasm" }];
+  const tries = eng === "modnet" ? [{ dtype: "fp32", device: "wasm" }] : [...(gpu ? [{ dtype: "fp16", device: "webgpu" }] : []), { dtype: "q8", device: "wasm" }, ...(gpu ? [{ dtype: "fp32", device: "webgpu" }] : []), { dtype: "fp32", device: "wasm" }];
   let lastErr;
   for (const t of tries) {
-    try { model = await AutoModel.from_pretrained(engine === "modnet" ? MODNET : MODEL, { ...t, progress_callback }); usedGpu = t.device === "webgpu"; lastErr = null; break; }
+    try { const m = await AutoModel.from_pretrained(eng === "modnet" ? MODNET : MODEL, { ...t, progress_callback }); if (eng === engine) { model = m; usedGpu = t.device === "webgpu"; } lastErr = null; break; }
     catch (e) { console.warn("Model load failed with", t, e); lastErr = e; stepTxt("Retrying with another model version…"); }
   }
   if (lastErr) throw lastErr;
@@ -201,6 +203,8 @@ const load = () => loading || (loading = doLoad().catch(e => { loading = null; t
 const tick = () => new Promise(r => setTimeout(r, 60));
 
 async function run(file) {
+  const want = $("#eng").value;
+  if (want !== engine) { engine = want; model = null; loading = null; }
   $("#home").style.display = "none"; $("#editor").style.display = "flex"; $("#dl").disabled = true;
   const url = URL.createObjectURL(file); busy(true, url); stepTxt("Step 1 of 3 · Preparing AI model…");
   try {
