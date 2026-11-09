@@ -137,7 +137,7 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 <script type="module">
 import { AutoModel, AutoProcessor, RawImage, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/+esm";
 // BiRefNet-lite (MIT license): safe for commercial use.
-const MODEL = "onnx-community/BiRefNet_lite-ONNX";
+const MODEL = "shozebDev/birefnet-lite-512-onnx"; // community 512px export of BiRefNet-lite (MIT), much lighter than the 1024px version
 const MODNET = "Xenova/modnet"; // Apache-2.0, lighter portrait model used if BiRefNet cannot run on this device
 let engine = "modnet"; // default: small, fast and reliable. "biref" is opt-in (heavier).
 env.allowLocalModels = false;
@@ -173,7 +173,7 @@ async function doLoad() {
   // Try the small model first; if its download fails, fall back to the full model (which may already be cached from earlier visits)
   const eng = engine;
   const gpu = navigator.gpu && !skipGpu;
-  const tries = eng === "modnet" ? [{ dtype: "fp32", device: "wasm" }] : [...(gpu ? [{ dtype: "fp16", device: "webgpu" }] : []), { dtype: "q8", device: "wasm" }, ...(gpu ? [{ dtype: "fp32", device: "webgpu" }] : []), { dtype: "fp32", device: "wasm" }];
+  const tries = eng === "modnet" ? [{ dtype: "fp32", device: "wasm" }] : [...(gpu ? [{ dtype: "fp16", device: "webgpu" }] : []), { dtype: "fp16", device: "wasm" }];
   let lastErr;
   for (const t of tries) {
     try { const m = await AutoModel.from_pretrained(eng === "modnet" ? MODNET : MODEL, { ...t, progress_callback }); if (eng === engine) { model = m; usedGpu = t.device === "webgpu"; } lastErr = null; break; }
@@ -182,8 +182,8 @@ async function doLoad() {
   if (lastErr) throw lastErr;
 }
 const procs = {};
-const getProc = async k => procs[k] ??= await AutoProcessor.from_pretrained(k === "modnet" ? MODNET : MODEL);
-let skipGpu = false, usedGpu = false;
+const getProc = async k => procs[k] ??= k === "modnet" ? await AutoProcessor.from_pretrained(MODNET) : await AutoProcessor.from_pretrained(MODEL, { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.485, 0.456, 0.406], feature_extractor_type: "ImageFeatureExtractor", image_std: [0.229, 0.224, 0.225], resample: 2, rescale_factor: 0.00392156862745098, size: { width: 512, height: 512 } } });
+let skipGpu = false, usedGpu = false, note = "";
 async function infer(image) {
   if (engine === "biref") {
     try {
@@ -221,8 +221,9 @@ async function run(file) {
     mctx.putImageData(d, 0, 0);
     cutout = new OffscreenCanvas(w, h); undoStack = []; crop = null; $("#preset").value = ""; setPreset("");
     cv.width = 0; paint(); busy(false);
-    $("#dl").disabled = false; status("Done in " + ((performance.now() - t0) / 1000).toFixed(1) + "s. Touch up, crop, pick a background, then download.");
+    $("#dl").disabled = false; status(note + "Done in " + ((performance.now() - t0) / 1000).toFixed(1) + "s. Touch up, crop, pick a background, then download."); note = "";
   } catch (e) {
+    if (engine === "biref") { engine = "modnet"; model = null; loading = null; $("#eng").value = "modnet"; note = "Object mode is not supported on this device, so Portrait mode was used. "; return run(file); }
     console.error(e); clearInterval(tipT); $("#bp").hidden = true;
     stepTxt("Couldn't finish: " + (e instanceof Error ? e.message : "not enough memory or not supported on this device, code " + e) + ". Check your internet connection (turn off VPN or ad-blocker if you use one) and try again.");
     $("#bretry").hidden = false; $("#bretry").onclick = () => run(file);
