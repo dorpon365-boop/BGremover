@@ -136,8 +136,8 @@ select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10p
 
 <script type="module">
 import { AutoModel, AutoProcessor, RawImage, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/+esm";
-// NOTE: RMBG-1.4 is non-commercial. Swap MODEL before monetizing.
-const MODEL = "briaai/RMBG-1.4";
+// BiRefNet-lite (MIT license): safe for commercial use.
+const MODEL = "onnx-community/BiRefNet_lite-ONNX";
 env.allowLocalModels = false;
 const $ = s => document.querySelector(s);
 const cv = $("#cv"), ctx = cv.getContext("2d"), view = $("#view"), stage = $("#stage");
@@ -173,17 +173,17 @@ async function doLoad() {
   const tries = [...(gpu ? [{ dtype: "fp16", device: "webgpu" }] : []), { dtype: "q8", device: "wasm" }, ...(gpu ? [{ dtype: "fp32", device: "webgpu" }] : []), { dtype: "fp32", device: "wasm" }];
   let lastErr;
   for (const t of tries) {
-    try { model = await AutoModel.from_pretrained(MODEL, { config: { model_type: "custom" }, ...t, progress_callback }); usedGpu = t.device === "webgpu"; lastErr = null; break; }
+    try { model = await AutoModel.from_pretrained(MODEL, { ...t, progress_callback }); usedGpu = t.device === "webgpu"; lastErr = null; break; }
     catch (e) { console.warn("Model load failed with", t, e); lastErr = e; stepTxt("Retrying with another model version…"); }
   }
   if (lastErr) throw lastErr;
 }
 const procs = {};
-const getProc = async size => procs[size] ??= await AutoProcessor.from_pretrained(MODEL, { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.5, 0.5, 0.5], feature_extractor_type: "ImageFeatureExtractor", image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098, size: { width: size, height: size } } });
+const getProc = async size => procs[size] ??= await AutoProcessor.from_pretrained(MODEL, { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true, image_mean: [0.485, 0.456, 0.406], feature_extractor_type: "ImageFeatureExtractor", image_std: [0.229, 0.224, 0.225], resample: 2, rescale_factor: 0.00392156862745098, size: { width: size, height: size } } });
 let skipGpu = false, usedGpu = false;
 async function infer(image) {
   const size = +$("#qual").value;
-  const go = async sz => { const { pixel_values } = await (await getProc(sz))(image); return (await model({ input: pixel_values })).output; };
+  const go = async sz => { const { pixel_values } = await (await getProc(sz))(image); return (await model({ input_image: pixel_values })).output_image; };
   try { return await go(size); }
   catch (e) {
     console.warn("Inference failed, retrying safely", e);
@@ -203,7 +203,7 @@ async function run(file) {
     const image = await RawImage.fromURL(url);
     const t0 = performance.now(); stepTxt("Step 3 of 3 · Cutting out the subject…"); await tick();
     const output = await infer(image);
-    const mask = await RawImage.fromTensor(output[0].mul(255).to("uint8")).resize(image.width, image.height);
+    const mask = await RawImage.fromTensor(output[0].sigmoid().mul(255).to("uint8")).resize(image.width, image.height);
     const w = image.width, h = image.height;
     orig = new OffscreenCanvas(w, h); orig.getContext("2d").drawImage(await createImageBitmap(file), 0, 0);
     maskCv = new OffscreenCanvas(w, h); mctx = maskCv.getContext("2d");
