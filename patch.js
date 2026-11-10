@@ -1,4 +1,4 @@
-/* patch.js v1 – add next to index.html. Sharper edges, high-quality export, PDF, quality & DPI options. */
+/* patch.js v2 – add next to index.html. Sharper edges, high-quality export, PDF, quality & DPI options. */
 (() => {
   const $ = s => document.querySelector(s);
 
@@ -114,5 +114,17 @@
     } catch (err) { console.error(err); alert("Could not create the file: " + err.message); }
   }, true);
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", addUI); else addUI();
+  // ---------- 4. Branding + footer links ----------
+  function brand() {
+    const b = document.querySelector("header b"); if (b) b.textContent = "Chobi";
+    document.title = "Chobi: Passport Photo Maker – Free Passport & Stamp Size Photos";
+    if (!$("#xfoot")) {
+      const f = document.createElement("footer"); f.id = "xfoot";
+      f.style.cssText = "max-width:1100px;margin:24px auto;padding:16px 24px;font-size:13px;color:#4A4F57;text-align:center";
+      f.innerHTML = '<a href="about.html">About</a> · <a href="privacy.html">Privacy Policy</a> · <a href="terms.html">Terms</a> · <a href="disclaimer.html">Disclaimer</a> · <a href="contact.html">Contact</a><div style="margin-top:8px">Always check the official photo requirements of the authority you are applying to.</div>';
+      document.body.appendChild(f);
+    }
+  }
+  const init = () => { addUI(); brand(); };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
 })();
