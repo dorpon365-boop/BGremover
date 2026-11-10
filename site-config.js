@@ -4,7 +4,7 @@ window.SITE = {
   OWNER_NAME: "YOUR NAME OR BUSINESS NAME",
   CONTACT_EMAIL: "you@example.com",
   SITE_URL: "https://your-username.github.io/your-repo/",
-  JURISDICTION: "Your City, West Bengal, India"
+  JURISDICTION: "kolkata, West Bengal, India"
 };
 (function () {
   var run = function () {
