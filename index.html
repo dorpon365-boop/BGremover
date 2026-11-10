@@ -378,6 +378,6 @@ drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) r
 addEventListener("paste", e => { const f = [...e.clipboardData.files][0]; if (f) run(f); });
 load().catch(() => {}); // start downloading the model while the user picks a photo
 </script>
-<script src="patch.js" defer></script>
+<script src="patch.js?v=2" defer></script>
 </body>
 </html>
